@@ -21,9 +21,9 @@ dependencies = [
 
 
 [project.urls]
-Homepage = "https://github.com/yourusername/polars-docs-mcp"
-Repository = "https://github.com/yourusername/polars-docs-mcp.git"
-Documentation = "https://github.com/yourusername/polars-docs-mcp#readme"
+Homepage = "https://github.com/HotTechStack/polars-docs-mcp"
+Repository = "https://github.com/HotTechStack/polars-docs-mcp.git"
+Documentation = "https://github.com/HotTechStack/polars-docs-mcp#readme"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
