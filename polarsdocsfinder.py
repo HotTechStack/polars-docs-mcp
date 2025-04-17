@@ -1,16 +1,13 @@
-from mcp.server.fastmcp import FastMCP
-import os
+import difflib
+import importlib
 import inspect
 import json
-import difflib
-import polars as pl
-import importlib
 
-# Initialize the MCP server with a friendly name
+import polars as pl
+from mcp.server.fastmcp import FastMCP
+
 mcp = FastMCP("Polars APIs Finder")
 
-
-# from mcp import tool  # adjust to your mcp import
 
 def discover_polars_components():
     """
