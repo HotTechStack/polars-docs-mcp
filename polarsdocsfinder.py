@@ -6,7 +6,7 @@ import json
 import polars as pl
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("Polars APIs Finder")
+mcp = FastMCP("Polars Docs Finder")
 
 
 def discover_polars_components():
