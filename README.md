@@ -47,4 +47,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Contact
 
-Created by [Abhishek Choudhary](mailto:abc@abhishekchoudhary.net). Report issues or request features at https://github.com/yourusername/polars-docs-mcp/issues.
+Created by [ABC](mailto:abc@abhishekchoudhary.net). Report issues or request features at https://github.com/HotTechStack/polars-docs-mcp/issues.
