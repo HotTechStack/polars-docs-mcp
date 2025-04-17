@@ -1,6 +1,5 @@
 # README.md
 
-```markdown
 # Polars Docs MCP
 
 A FastMCP tool to search and retrieve Polars API documentation.
