@@ -1,0 +1,30 @@
+[project]
+name = "polars-docs-mcp"
+version = "0.1.0"
+description =  "A FastMCP tool to search and retrieve Polars API documentation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "ABC", email = "abc@abhishekchoudhary.net" }
+]
+keywords = ["polars", "mcp", "documentation", "api"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Documentation",
+]
+dependencies = [
+    "mcp[cli]>=1.6.0",
+    "polars>=1.27.1",
+]
+
+
+[project.urls]
+Homepage = "https://github.com/yourusername/polars-docs-mcp"
+Repository = "https://github.com/yourusername/polars-docs-mcp.git"
+Documentation = "https://github.com/yourusername/polars-docs-mcp#readme"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
