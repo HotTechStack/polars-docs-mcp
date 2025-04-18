@@ -194,6 +194,44 @@ async def search_polars_docs(
     return json.dumps(picked[:max_results], indent=2)
 
 
+@mcp.tool(description="Verify if a given Polars API name or signature is valid.")
+def verify_polars_api(api_ref: str) -> str:
+    """
+    Verify that the provided Polars API reference or full signature exists.
+
+    Args:
+        api_ref (str): An API name (e.g. "DataFrame.filter") or full signature
+                       (e.g. "DataFrame.filter(self, predicate: IntoExpr) -> DataFrame").
+
+    Returns:
+        str: JSON with {
+            "valid": bool,
+            "matches": [
+               {"name": str, "signature": str},
+               ...
+            ]
+        }
+    """
+    # Rebuild index of APIs
+    components = discover_polars_components()
+    all_apis = []
+    for comp_name, comp in components.items():
+        for attr_name, member in inspect.getmembers(comp, predicate=inspect.isroutine):
+            if attr_name.startswith("_"):
+                continue
+            try:
+                sig = str(inspect.signature(getattr(comp, attr_name)))
+            except (ValueError, TypeError):
+                sig = "(...)"
+            full_sig = f"{comp_name}.{attr_name}{sig}"
+            all_apis.append({"name": f"{comp_name}.{attr_name}", "signature": full_sig})
+
+    # Find matches
+    matches = [api for api in all_apis if api_ref == api["name"] or api_ref == api["signature"]]
+    valid = len(matches) > 0
+    return json.dumps({"valid": valid, "matches": matches}, indent=2)
+
+
 if __name__ == "__main__":
     # Initialize and run the server
     mcp.run(transport='stdio')
