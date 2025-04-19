@@ -35,6 +35,15 @@ A FastMCP tool to search and retrieve Polars API documentation.
 }
 ```
 
+2. Visual Testing of MCP Server
+
+```bash
+npx @modelcontextprotocol/inspector uv run polarsdocsfinder.py
+```
+
+![MCP INspector](resources/mcp_inspector.png)
+
+
 Requires Python 3.11+.
 
 
