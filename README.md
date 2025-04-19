@@ -45,6 +45,12 @@ Requires Python 3.11+.
 - `verify_polars_api(api_ref: str)`: Verify if a Polars API reference is valid.
 
 
+## Examples Snapshots
+
+![Claude](resources/claud1.jpeg)
+
+![Claud2](resources/claude2.jpeg)
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
