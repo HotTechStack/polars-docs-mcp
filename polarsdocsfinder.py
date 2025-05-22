@@ -1,12 +1,16 @@
+from fastmcp import FastMCP
+import json
+from enum import Enum, auto
+from typing import Optional, List, Dict, Union, Literal
+import polars as pl
+import inspect
 import difflib
 import importlib
-import inspect
-import json
+import importlib.metadata
+import argparse
 
-import polars as pl
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("Polars Docs Finder")
+# Initialize FastMCP
+mcp = FastMCP("Polars Docs Finder with FastMCP")
 
 
 def discover_polars_components():
@@ -44,6 +48,83 @@ def discover_polars_components():
     return comps
 
 
+@mcp.tool(description="Get the currently installed Polars version information")
+def get_polars_version() -> str:
+    """
+    Get the currently installed Polars version information.
+
+    This tool returns detailed version information about the Polars package
+    currently installed in the environment, including the version number,
+    installation location, and other metadata.
+
+    Returns:
+        str: A JSON-encoded object containing version information:
+            {
+              "version": "0.20.3",
+              "package_name": "polars",
+              "location": "/path/to/site-packages",
+              "metadata": {
+                "author": "...",
+                "summary": "...",
+                "home_page": "...",
+                ...
+              }
+            }
+
+    Example:
+        # Get current Polars version
+        get_polars_version()
+    """
+    try:
+        # Get version using importlib.metadata (recommended approach)
+        version = importlib.metadata.version("polars")
+
+        # Get additional metadata
+        try:
+            metadata = importlib.metadata.metadata("polars")
+            metadata_dict = dict(metadata)
+        except Exception:
+            metadata_dict = {}
+
+        # Try to get the module location
+        try:
+            location = pl.__file__ if hasattr(pl, '__file__') else "Unknown"
+            if location and location.endswith("__init__.py"):
+                location = location.replace("__init__.py", "")
+        except Exception:
+            location = "Unknown"
+
+        version_info = {
+            "version": version,
+            "package_name": "polars",
+            "location": location,
+            "metadata": metadata_dict
+        }
+
+        return json.dumps(version_info, indent=2, default=str)
+
+    except importlib.metadata.PackageNotFoundError:
+        # Fallback: try to get version from polars module directly
+        try:
+            version = getattr(pl, '__version__', 'Unknown')
+            version_info = {
+                "version": version,
+                "package_name": "polars",
+                "location": getattr(pl, '__file__', 'Unknown'),
+                "metadata": {},
+                "note": "Version obtained from module attribute (metadata unavailable)"
+            }
+            return json.dumps(version_info, indent=2, default=str)
+
+        except Exception as e:
+            error_info = {
+                "error": "Could not determine Polars version",
+                "details": str(e),
+                "version": "Unknown",
+                "package_name": "polars"
+            }
+            return json.dumps(error_info, indent=2)
+
 
 @mcp.tool(description="List all available high‑level Polars API components")
 def list_polars_components() -> str:
@@ -78,10 +159,10 @@ def list_polars_components() -> str:
 
 @mcp.tool(description="Search and retrieve Polars API signatures and descriptions.")
 async def search_polars_docs(
-    api_refs: list[str] | None = None,
-    query: str | None = None,
-    max_results: int = 1000,
-    temperature: float = 0.2,
+        api_refs: list[str] | None = None,
+        query: str | None = None,
+        max_results: int = 1000,
+        temperature: float = 0.2,
 ) -> str:
     """
     Search and retrieve Polars API signatures and descriptions.
@@ -232,6 +313,67 @@ def verify_polars_api(api_ref: str) -> str:
     return json.dumps({"valid": valid, "matches": matches}, indent=2)
 
 
+@mcp.tool(description="List all modern data stacks that can be used with Polars.")
+def list_all_modern_data_stacks():
+    """
+    List all modern data stacks that can be used with Polars.
+    """
+    # This is a placeholder function. You can implement it to return a list of
+    # modern data stacks that are compatible with Polars.
+    return ["DuckDB", "Polars", "Daft", "Hudi", "Iceberg", "Delta Lake", "Apache Arrow", "Apache Parquet", "Xorq"]
+
+
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Polars MCP Server with FastMCP")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http", "sse"],
+        default="stdio",
+        help="Transport method (default: stdio)"
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host address for HTTP/SSE transports (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8111,
+        help="Port number for HTTP/SSE transports (default: 8111)"
+    )
+    parser.add_argument(
+        "--path",
+        default="/mcp",
+        help="URL path for streamable-http transport (default: /mcp)"
+    )
+
+    args = parser.parse_args()
+
+    print(f"Starting Polars MCP Server with transport: {args.transport}")
+
+    if args.transport == "stdio":
+        # STDIO (Default): Best for local tools and command-line scripts
+        print("Using STDIO transport - connect via command line or local tools")
+        mcp.run(transport="stdio")
+
+    elif args.transport == "streamable-http":
+        # Streamable HTTP: Recommended for web deployments
+        print(f"Using Streamable HTTP transport on {args.host}:{args.port}{args.path}")
+        mcp.run(
+            transport="streamable-http",
+            host=args.host,
+            port=args.port,
+            path=args.path
+        )
+
+    elif args.transport == "sse":
+        # SSE: For compatibility with existing SSE clients
+        print(f"Using SSE transport on {args.host}:{args.port}")
+        mcp.run(
+            transport="sse",
+            host=args.host,
+            port=args.port
+        )
