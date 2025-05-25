@@ -157,122 +157,252 @@ def list_polars_components() -> str:
     return json.dumps(names, indent=2)  # JSON‑encode for the LLM
 
 
-@mcp.tool(description="Search and retrieve Polars API signatures and descriptions.")
-async def search_polars_docs(
-        api_refs: list[str] | None = None,
-        query: str | None = None,
+@mcp.tool(
+    description="Search Polars API methods and documentation. Finds exact matches first, then falls back to fuzzy search.")
+async def search_polars_api(
+        components: str = "",
+        methods: str = "",
         max_results: int = 1000,
-        temperature: float = 0.2,
+        debug: bool = False,
 ) -> str:
     """
-    Search and retrieve Polars API signatures and descriptions.
+    Search Polars API methods and get their signatures and documentation.
 
-    This tool inspects all public classes in the `polars` package (DataFrame,
-    LazyFrame, Series, Expr, GroupBy, etc.) and returns structured JSON
-    entries with `{name, signature, description}` for the requested APIs.
-
-    Behavior:
-      - If `api_refs` is provided:
-        • Entries without a dot (e.g. `"DataFrame"`) return *all* methods of that class.
-        • Entries with a dot (e.g. `"Expr.add"`) return exactly that one method.
-        • Returns every match (ignores `max_results` when `api_refs` is used).
-      - If `api_refs` is None and `query` is provided:
-        • Performs case‑insensitive substring search on both names and descriptions.
-        • If no direct matches, falls back to fuzzy name matching.
-        • Returns up to `max_results` items.
-      - `temperature` is reserved for future ranking/LLM‑driven sorting (currently unused).
-      - Use 'io' api for database related references
-        - Use 'functions' api for functions related references
-        - Use 'convert' api for convert related references
+    This function is designed for LLMs to easily find Polars methods. It tries multiple
+    search strategies automatically:
+    1. Exact component matches (case-insensitive)
+    2. Exact method matches (case-insensitive)
+    3. Fuzzy search as fallback
 
     Args:
-        api_refs (list[str] | None):
-            Optional list of Polars API identifiers.
-            - `"Component"` returns all `Component.*` methods.
-            - `"Component.method"` returns that exact signature.
-        query (str | None):
-            Optional substring to search for in API names or descriptions.
+        components (str):
+            Polars component names to search (case-insensitive).
+            Examples: "dataframe", "DataFrame", "series,lazyframe", "expr"
+
+        methods (str):
+            Specific method names to find (case-insensitive).
+            Examples: "filter", "join,groupby", "select,with_columns"
+            Can be used alone or combined with components.
+
         max_results (int):
-            Maximum number of entries to return for substring/fuzzy searches.
-        temperature (float):
-            Controls randomness in ranking (not used in this implementation).
+            Maximum number of results to return (default: 50)
+
+        debug (bool):
+            Show detailed search process information
 
     Returns:
-        str: A JSON‑encoded list of objects:
-            [
-              {
-                "name": "DataFrame.filter",
-                "signature": "DataFrame.filter(self, predicate: IntoExpr) -> DataFrame",
-                "description": "Filter rows by predicate expression."
-              },
-              ...
-            ]
+        str: JSON array of method information with name, signature, and description
 
-    Example:
+    Examples:
         # Get all DataFrame methods
-        search_polars_docs(api_refs=["DataFrame"])
+        search_polars_api(components="dataframe")
 
-        # Get just the 'add' method on Expr
-        search_polars_docs(api_refs=["Expr.add"])
+        # Get specific methods from any component
+        search_polars_api(methods="filter,join")
 
-        # Search for any API relating to 'join'
-        search_polars_docs(query="join", max_results=10)
+        # Get specific methods from specific components
+        search_polars_api(components="dataframe,series", methods="groupby")
+
+        # Fuzzy search will automatically activate if exact matches fail
+        search_polars_api(methods="filtter")  # Will find "filter"
     """
 
-    # 1) Build the full API index
-    components = discover_polars_components()
-    all_apis: list[dict] = []
-    for comp_name, comp in components.items():
-        for attr_name, member in inspect.getmembers(comp, predicate=inspect.isroutine):
+    # Parse and normalize inputs
+    component_list = []
+    if components.strip():
+        component_list = [c.strip().lower() for c in components.split(",") if c.strip()]
+
+    method_list = []
+    if methods.strip():
+        method_list = [m.strip().lower() for m in methods.split(",") if m.strip()]
+
+    # Debug info
+    debug_info = {
+        "search_strategy": "",
+        "inputs": {
+            "components_raw": components,
+            "methods_raw": methods,
+            "components_parsed": component_list,
+            "methods_parsed": method_list
+        },
+        "search_steps": [],
+        "results_found": 0
+    }
+
+    if debug:
+        print(f"=== Search Input Debug ===")
+        print(f"Components: {component_list}")
+        print(f"Methods: {method_list}")
+        print("=" * 30)
+
+    # Build the full API index with case-insensitive mapping
+    components_discovered = discover_polars_components()
+    all_apis = []
+    component_name_mapping = {}  # lowercase -> actual name
+
+    for comp_name, comp in components_discovered.items():
+        if comp is None:
+            continue
+
+        # Store case-insensitive mapping
+        component_name_mapping[comp_name.lower()] = comp_name
+
+        for attr_name in dir(comp):
             if attr_name.startswith("_"):
                 continue
-            try:
-                sig = str(inspect.signature(getattr(comp, attr_name)))
-            except (ValueError, TypeError):
-                sig = "(...)"
-            doc = inspect.getdoc(getattr(comp, attr_name)) or ""
-            short_doc = doc.strip().split("\n")[0]
-            all_apis.append({
-                "name": f"{comp_name}.{attr_name}",
-                "signature": f"{comp_name}.{attr_name}{sig}",
-                "description": short_doc
-            })
 
-    picked: list[dict]
-    if api_refs:
-        picked = []
-        # for each ref, collect matching APIs
-        for ref in api_refs:
-            if "." in ref:
-                # exact Component.method match
-                picked += [api for api in all_apis if api["name"] == ref]
-            else:
-                # component-level: match Component.*
-                prefix = f"{ref}."
-                picked += [api for api in all_apis if api["name"].startswith(prefix)]
-        # dedupe and preserve order
+            try:
+                member = getattr(comp, attr_name)
+                if not (callable(member) or isinstance(member, property)):
+                    continue
+
+                try:
+                    if callable(member) and not isinstance(member, type):
+                        sig = str(inspect.signature(member))
+                    else:
+                        sig = ""
+                except (ValueError, TypeError, AttributeError):
+                    sig = "(...)"
+
+                doc = inspect.getdoc(member) or ""
+                short_doc = doc.strip().split("\n")[0] if doc.strip() else ""
+
+                if not short_doc and not callable(member):
+                    continue
+
+                all_apis.append({
+                    "name": f"{comp_name}.{attr_name}",
+                    "component": comp_name,
+                    "method": attr_name,
+                    "signature": f"{comp_name}.{attr_name}{sig}",
+                    "description": short_doc
+                })
+
+            except (AttributeError, TypeError):
+                continue
+
+    debug_info["total_apis"] = len(all_apis)
+
+    # Search Strategy 1: Exact component matches (case-insensitive)
+    results = []
+
+    if component_list and not method_list:
+        debug_info["search_strategy"] = "exact_components"
+        debug_info["search_steps"].append("Searching for exact component matches")
+
+        for comp_lower in component_list:
+            if comp_lower in component_name_mapping:
+                actual_comp_name = component_name_mapping[comp_lower]
+                matches = [api for api in all_apis if api["component"] == actual_comp_name]
+                results.extend(matches)
+                debug_info["search_steps"].append(f"Found {len(matches)} methods for {actual_comp_name}")
+
+    # Search Strategy 2: Exact method matches (case-insensitive)
+    elif method_list and not component_list:
+        debug_info["search_strategy"] = "exact_methods"
+        debug_info["search_steps"].append("Searching for exact method matches")
+
+        for method_lower in method_list:
+            matches = [api for api in all_apis if api["method"].lower() == method_lower]
+            results.extend(matches)
+            debug_info["search_steps"].append(f"Found {len(matches)} matches for method '{method_lower}'")
+
+    # Search Strategy 3: Component + Method combination
+    elif component_list and method_list:
+        debug_info["search_strategy"] = "component_and_method"
+        debug_info["search_steps"].append("Searching for component + method combinations")
+
+        for comp_lower in component_list:
+            if comp_lower in component_name_mapping:
+                actual_comp_name = component_name_mapping[comp_lower]
+                for method_lower in method_list:
+                    matches = [api for api in all_apis
+                               if api["component"] == actual_comp_name and api["method"].lower() == method_lower]
+                    results.extend(matches)
+                    debug_info["search_steps"].append(
+                        f"Found {len(matches)} matches for {actual_comp_name}.{method_lower}")
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_results = []
+    for api in results:
+        key = api["name"]
+        if key not in seen:
+            seen.add(key)
+            unique_results.append(api)
+    results = unique_results
+
+    # Search Strategy 4: Fuzzy fallback if no exact matches
+    if not results and (component_list or method_list):
+        debug_info["search_strategy"] += "_with_fuzzy_fallback"
+        debug_info["search_steps"].append("No exact matches found, trying fuzzy search")
+
+        fuzzy_candidates = []
+
+        # Fuzzy search on components
+        if component_list:
+            all_component_names = [name.lower() for name in component_name_mapping.keys()]
+            for comp_lower in component_list:
+                close_comps = difflib.get_close_matches(comp_lower, all_component_names, n=3, cutoff=0.6)
+                for close_comp in close_comps:
+                    actual_comp_name = component_name_mapping[close_comp]
+                    comp_matches = [api for api in all_apis if api["component"] == actual_comp_name]
+                    fuzzy_candidates.extend(comp_matches)
+                    debug_info["search_steps"].append(
+                        f"Fuzzy: '{comp_lower}' → '{actual_comp_name}' ({len(comp_matches)} methods)")
+
+        # Fuzzy search on methods
+        if method_list:
+            all_method_names = list(set(api["method"].lower() for api in all_apis))
+            for method_lower in method_list:
+                close_methods = difflib.get_close_matches(method_lower, all_method_names, n=5, cutoff=0.6)
+                for close_method in close_methods:
+                    method_matches = [api for api in all_apis if api["method"].lower() == close_method]
+                    fuzzy_candidates.extend(method_matches)
+                    debug_info["search_steps"].append(
+                        f"Fuzzy: '{method_lower}' → '{close_method}' ({len(method_matches)} matches)")
+
+        # Remove duplicates from fuzzy results
         seen = set()
-        deduped = []
-        for api in picked:
+        for api in fuzzy_candidates:
             key = api["name"]
             if key not in seen:
                 seen.add(key)
-                deduped.append(api)
-        picked = deduped
+                results.append(api)
 
-    else:
-        # substring + fuzzy fallback as before
-        q = (query or "").lower()
-        picked = [api for api in all_apis
-                  if q in api["name"].lower() or q in api["description"].lower()]
-        if not picked and query:
-            names = [api["name"].split(".", 1)[1] for api in all_apis]
-            close = difflib.get_close_matches(query, names, n=max_results, cutoff=0.1)
-            picked = [api for api in all_apis
-                      if api["name"].split(".", 1)[1] in close]
+    # Limit results
+    final_results = results[:max_results]
+    debug_info["results_found"] = len(final_results)
 
-    # limit results
-    return json.dumps(picked[:max_results], indent=2)
+    # Debug output
+    if debug:
+        print(f"=== Search Strategy Debug ===")
+        print(f"Strategy used: {debug_info['search_strategy']}")
+        for step in debug_info["search_steps"]:
+            print(f"  {step}")
+        print(f"Final results: {len(final_results)} items")
+        print("=" * 30)
+
+    # Clean up results for output (remove internal fields)
+    clean_results = []
+    for api in final_results:
+        clean_results.append({
+            "name": api["name"],
+            "signature": api["signature"],
+            "description": api["description"]
+        })
+
+    # Prepare response
+    response = {
+        "results": clean_results,
+        "total_found": len(final_results),
+        "search_strategy": debug_info["search_strategy"]
+    }
+
+    if debug:
+        response["debug"] = debug_info
+
+    return json.dumps(response, indent=2)
 
 
 @mcp.tool(description="Verify if a given Polars API name or signature is valid.")
@@ -296,21 +426,65 @@ def verify_polars_api(api_ref: str) -> str:
     # Rebuild index of APIs
     components = discover_polars_components()
     all_apis = []
+
     for comp_name, comp in components.items():
-        for attr_name, member in inspect.getmembers(comp, predicate=inspect.isroutine):
+        if comp is None:
+            continue
+
+        for attr_name in dir(comp):
             if attr_name.startswith("_"):
                 continue
             try:
-                sig = str(inspect.signature(getattr(comp, attr_name)))
-            except (ValueError, TypeError):
-                sig = "(...)"
-            full_sig = f"{comp_name}.{attr_name}{sig}"
-            all_apis.append({"name": f"{comp_name}.{attr_name}", "signature": full_sig})
+                member = getattr(comp, attr_name)
+                if callable(member):
+                    try:
+                        sig = str(inspect.signature(member))
+                    except (ValueError, TypeError):
+                        sig = "(...)"
+                    full_sig = f"{comp_name}.{attr_name}{sig}"
+                    all_apis.append({"name": f"{comp_name}.{attr_name}", "signature": full_sig})
+            except (AttributeError, TypeError):
+                continue
 
     # Find matches
     matches = [api for api in all_apis if api_ref == api["name"] or api_ref == api["signature"]]
     valid = len(matches) > 0
     return json.dumps({"valid": valid, "matches": matches}, indent=2)
+
+
+@mcp.tool(description="Debug tool to show what components are discovered and their types")
+def debug_polars_components() -> str:
+    """
+    Debug tool to show what components are discovered and their types.
+    This helps diagnose issues with component discovery.
+    """
+    components = discover_polars_components()
+    debug_info = []
+
+    for name, comp in components.items():
+        comp_info = {
+            "name": name,
+            "type": type(comp).__name__,
+            "module": getattr(comp, '__module__', 'Unknown'),
+            "is_class": inspect.isclass(comp),
+            "is_function": inspect.isfunction(comp),
+            "is_module": inspect.ismodule(comp),
+            "methods_count": 0
+        }
+
+        # Count methods for classes
+        if inspect.isclass(comp) or inspect.ismodule(comp):
+            try:
+                methods = [attr for attr in dir(comp)
+                           if not attr.startswith("_") and callable(getattr(comp, attr, None))]
+                comp_info["methods_count"] = len(methods)
+                comp_info["sample_methods"] = methods[:5]  # First 5 methods as sample
+            except Exception as e:
+                comp_info["error"] = str(e)
+
+        debug_info.append(comp_info)
+
+    return json.dumps(debug_info, indent=2, default=str)
 
 
 @mcp.tool(description="List all modern data stacks that can be used with Polars.")

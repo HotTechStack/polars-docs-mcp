@@ -15,9 +15,8 @@ classifiers = [
     "Topic :: Software Development :: Documentation",
 ]
 dependencies = [
-    "mcp[cli]>=1.6.0",
     "polars>=1.30.0",
-    "fastmcp>=2.4.0"
+    "fastmcp>=2.5.0",
 ]
 
 [tool.setuptools]
